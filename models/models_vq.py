@@ -195,20 +195,12 @@ class VQModel(torch.nn.Module):
             # 获取候选码本索引
             candidate_indices, candidate_norms_sq = self._get_candidates(input_norms_sq,tok_embeddings_weight)
             
-            # 1. 找出所有候选索引中的唯一值，并建立映射关系
-            unique_indices, inverse_indices = torch.unique(candidate_indices, return_inverse=True)
-            
-            # 2. 创建临时的、小的子码本 (sub-codebook)
-            unique_cand_vecs = F.embedding(unique_indices, tok_embeddings_weight.detach())
-            
-            # 3. 高效计算点积
-            all_dots = torch.matmul(z_flattened.detach(), unique_cand_vecs.T)
-            
-            # 4. 使用 inverse_indices 来 "还原" 每个 input 对应的候选点积
-            remapped_indices = inverse_indices.reshape(candidate_indices.shape)
-            dot = torch.gather(all_dots, 1, remapped_indices)
-            
-            # 5. 计算欧氏距离平方
+            # 1. 计算输入与整个码本的点积 (N, K)
+            full_dot_product = torch.matmul(flat_input.detach(), self.embedding.weight.detach().t())
+
+            # 2. 从 (N, K) 的结果中，根据 candidate_indices (N, k_c) 选出我们需要的点积值
+            dot = full_dot_product.gather(1, candidate_indices)
+
             dists_sq = input_norms_sq + candidate_norms_sq - 2.0 * dot
             
             # 6. 找到最小距离的索引
