@@ -196,7 +196,7 @@ class VQModel(torch.nn.Module):
             candidate_indices, candidate_norms_sq = self._get_candidates(input_norms_sq,tok_embeddings_weight)
             
             # 1. 计算输入与整个码本的点积 (N, K)
-            full_dot_product = torch.matmul(flat_input.detach(), self.embedding.weight.detach().t())
+            full_dot_product = torch.matmul(z_flattened.detach(), self.embedding.weight.detach().t())
 
             # 2. 从 (N, K) 的结果中，根据 candidate_indices (N, k_c) 选出我们需要的点积值
             dot = full_dot_product.gather(1, candidate_indices)
