@@ -3,7 +3,8 @@ import torch.nn.functional as F
 import importlib
 from einops import rearrange
 from torch.nn import Embedding
-from models.discriminator import NLayerDiscriminator, weights_init
+# Removed discriminator import for inference
+# from models.discriminator import NLayerDiscriminator, weights_init
 from models.lpips import LPIPS
 from models.encoder_decoder import Encoder, Decoder, Decoder_Cross
 
@@ -41,14 +42,11 @@ class VQModel(torch.nn.Module):
         self.stage = args.stage
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
-        self.discriminator = NLayerDiscriminator(input_nc=3,
-                                                n_layers=2,
-                                                use_actnorm=False,
-                                                ndf=64
-                                                ).apply(weights_init)
+        # Removed discriminator for inference
         
         embed_dim = args.embed_dim
-        self.perceptual_loss = LPIPS().eval()
+        # Removed perceptual loss for inference
+        # self.perceptual_loss = LPIPS().eval()
         self.perceptual_weight = args.rate_p        
         self.quantize_type = args.quantizer_type
 
@@ -141,36 +139,7 @@ class VQModel(torch.nn.Module):
             self.register_buffer('offsets', torch.arange(self.num_candidates, dtype=torch.long).unsqueeze(0), persistent=False)
             self._is_cached = False
 
-    def hinge_d_loss(self, logits_real, logits_fake):
-        loss_real = torch.mean(F.relu(1. - logits_real))
-        loss_fake = torch.mean(F.relu(1. + logits_fake))
-        d_loss = 0.5 * (loss_real + loss_fake)
-        return d_loss
 
-    def calculate_adaptive_weight(self, nll_loss, g_loss, discriminator_weight, last_layer=None):
-
-        nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
-        g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
-
-        d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
-        d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
-        d_weight = d_weight * discriminator_weight
-        return d_weight
-
-    def cluster_size_ema_update(self, new_cluster_size):
-        self.cluster_size.data.mul_(self.decay).add_(new_cluster_size, alpha=1 - self.decay)
-
-    def embed_avg_ema_update(self, new_embed_avg): 
-        self.embed_avg.data.mul_(self.decay).add_(new_embed_avg, alpha=1 - self.decay)
-
-    def weight_update(self, num_tokens):
-        n = self.cluster_size.sum()
-        smoothed_cluster_size = (
-                (self.cluster_size + self.eps) / (n + num_tokens * self.eps) * n
-            )
-        #normalize embedding average with smoothed cluster size
-        embed_normalized = self.embed_avg / smoothed_cluster_size.unsqueeze(1)
-        self.tok_embeddings.weight.data.copy_(embed_normalized)
 
     def _cache_sorted_embeddings(self, tok_embeddings_weight):
         codebook_norms_sq = tok_embeddings_weight.square().sum(dim=1)
@@ -250,18 +219,9 @@ class VQModel(torch.nn.Module):
             
             if self.quantize_type == "ema":
                 z_q = self.tok_embeddings(min_encoding_indices).view(z.shape)
-                encodings = F.one_hot(min_encoding_indices, self.num_tokens).type(z.dtype)     
-                avg_probs = torch.mean(encodings, dim=0)
-                perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-7)))
+                # For inference, skip EMA updates
                 min_encodings = None
-                #EMA cluster size
-                encodings_sum = encodings.sum(0)            
-                self.cluster_size_ema_update(encodings_sum)
-                #EMA embedding average
-                embed_sum = encodings.transpose(0,1) @ z_flattened            
-                self.embed_avg_ema_update(embed_sum)
-                #normalize embed_avg and update weight
-                self.weight_update(self.num_tokens)
+                perplexity = None
                 loss = F.mse_loss(z_q.detach(), z) 
             else:
                 min_encodings = None
@@ -286,7 +246,7 @@ class VQModel(torch.nn.Module):
 
         return z_q, loss, (None, min_encodings, min_encoding_indices)
     
-    def forward(self, input, global_input, data_iter_step, step=0, is_val=False):
+    def forward(self, input, global_input=None, data_iter_step=None, step=None, is_val=False):
         
         #encoder_feature = self.quant_conv(self.encoder(input))
         quant, qloss, [_, _, tk_labels] = self.encode(input)
@@ -296,37 +256,9 @@ class VQModel(torch.nn.Module):
             return quant, tk_labels.view(input.shape[0], -1)
         
         dec = self.decode(quant)
-
-
-
-        ###Loss
-        rec_loss = torch.mean(torch.abs(input.contiguous() - dec.contiguous()))
         
-        p_loss = torch.mean(self.perceptual_loss(input.contiguous(), dec.contiguous()))
-        
-        if step == 0: #Upadte Generator
-            logits_fake = self.discriminator(dec)
-            g_loss = -torch.mean(logits_fake)
-
-            if is_val:
-                loss = rec_loss + self.args.rate_q * qloss + self.perceptual_weight * p_loss + 0 * g_loss
-                return loss, rec_loss, qloss, p_loss, g_loss, tk_labels.view(input.shape[0], -1), dec
-            
-            d_weight = self.calculate_adaptive_weight(rec_loss + self.perceptual_weight * p_loss, g_loss, self.args.rate_d, last_layer=self.decoder.conv_out.weight)
-            
-            if data_iter_step > self.args.disc_start:
-                loss = rec_loss + self.args.rate_q * qloss + self.perceptual_weight * p_loss + d_weight * g_loss
-            else:
-                loss = rec_loss + self.args.rate_q * qloss + self.perceptual_weight * p_loss + 0 * g_loss
-
-            return loss, rec_loss, qloss, p_loss, g_loss, tk_labels, dec
-        else: #Upadte Discriminator
-            logits_real =  self.discriminator(input.contiguous().detach().clone())
-            logits_fake = self.discriminator(dec.detach().clone())
-            d_loss = self.hinge_d_loss(logits_real, logits_fake)
-            loss = d_loss + 0 * (rec_loss + qloss + p_loss)
-
-            return loss, rec_loss, qloss, p_loss, d_loss, tk_labels, dec
+        # For inference, only return the reconstructed image
+        return dec
 
 
     def encode(self, input):
@@ -344,11 +276,13 @@ class VQModel(torch.nn.Module):
 
         return dec
     
-    def get_last_layer(self):
-        return self.decoder.conv_out.weight
-
     def decode_code(self, code_b):
-        quant_b = self.quantize.embedding(code_b)
+        # 获取码本权重（考虑投影）
+        if self.args.use_cblinear != 0:
+            tok_embeddings_weight = self.codebook_projection(self.tok_embeddings.weight)
+        else:
+            tok_embeddings_weight = self.tok_embeddings.weight
+        quant_b = F.embedding(code_b, tok_embeddings_weight)
         dec = self.decode(quant_b)
         return dec
 

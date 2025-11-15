@@ -123,7 +123,9 @@ for data_iter_step, (images, paths) in enumerate(data_loader):
     b = images.shape[0]
 
     with torch.no_grad():
-        _, _, _, _, _, tk_labels, xrec = model(images, None, data_iter_step, step=0, is_val=True)
+        xrec = model(images, None, data_iter_step, step=0, is_val=True)
+        # 从encode获取tk_labels
+        _, _, [_, _, tk_labels] = model.encode(images)
 
     # 计算MSE
     mse = F.mse_loss(images, xrec, reduction='none').mean(dim=[1,2,3])
