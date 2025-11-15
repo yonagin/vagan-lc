@@ -132,11 +132,22 @@ for data_iter_step, (images, paths) in enumerate(data_loader):
         xrec = model(images, None, data_iter_step, step=0, is_val=True)
         # 修改forward方法调用，正确处理返回的unique_cand_vecs_info信息
         if hasattr(model, 'encode'):
-            _, _, [_, _, tk_labels, unique_cand_vecs_info] = model.encode(images)
+            _, _, info = model.encode(images)
+            # 正确解包info元组
+            if len(info) == 4:
+                _, _, tk_labels, unique_cand_vecs_info = info
+            else:
+                _, _, tk_labels = info
+                unique_cand_vecs_info = None
         else:
             # 如果没有encode方法，则直接从forward获取结果
-            _, _, [_, _, tk_labels] = model(images, None, data_iter_step, step=0, is_val=True)
-            unique_cand_vecs_info = None
+            _, _, info = model(images, None, data_iter_step, step=0, is_val=True)
+            # 正确解包info元组
+            if len(info) == 4:
+                _, _, tk_labels, unique_cand_vecs_info = info
+            else:
+                _, _, tk_labels = info
+                unique_cand_vecs_info = None
         
         # 收集unique_cand_vecs的大小信息
         if unique_cand_vecs_info is not None:

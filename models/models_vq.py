@@ -272,7 +272,12 @@ class VQModel(torch.nn.Module):
     def forward(self, input, global_input=None, data_iter_step=None, step=None, is_val=False):
         
         #encoder_feature = self.quant_conv(self.encoder(input))
-        quant, qloss, [_, _, tk_labels] = self.encode(input)
+        quant, qloss, info = self.encode(input)
+        # 解包info元组，正确处理可能包含unique_cand_vecs_info的情况
+        if len(info) == 4:
+            _, _, tk_labels, _ = info
+        else:
+            _, _, tk_labels = info
 
         ###Training GPT
         if self.stage == 2: 
