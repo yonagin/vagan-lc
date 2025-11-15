@@ -223,6 +223,12 @@ class VQModel(torch.nn.Module):
             min_encodings = None
             perplexity = None
             
+            # 返回unique_cand_vecs的大小信息
+            unique_cand_vecs_info = {
+                'size': unique_cand_vecs.shape[0],
+                'unique_indices_count': unique_indices.shape[0]
+            }
+            
         else:
             # 原始距离计算
             d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
@@ -243,6 +249,9 @@ class VQModel(torch.nn.Module):
                 z_q = F.embedding(min_encoding_indices, tok_embeddings_weight).view(z.shape)
                 loss = torch.mean((z_q.detach()-z)**2) + 0.33 * torch.mean((z_q - z.detach()) ** 2)
     
+            # 其他量化类型不提供unique_cand_vecs信息
+            unique_cand_vecs_info = None
+
         # preserve gradients
         z_q = z + (z_q - z).detach()
 
@@ -258,7 +267,7 @@ class VQModel(torch.nn.Module):
             min_encoding_indices = min_encoding_indices.reshape(
                 z_q.shape[0], z_q.shape[2], z_q.shape[3])
 
-        return z_q, loss, (None, min_encodings, min_encoding_indices)
+        return z_q, loss, (None, min_encodings, min_encoding_indices, unique_cand_vecs_info)
     
     def forward(self, input, global_input=None, data_iter_step=None, step=None, is_val=False):
         

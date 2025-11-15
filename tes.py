@@ -116,6 +116,9 @@ token_freq = torch.zeros(args.n_vision_words).to(DEVICE)
 count = 0
 start_time = time.time()
 
+# 添加用于统计unique_cand_vecs码本大小的变量
+unique_cand_vecs_sizes = []
+
 def compute_psnr(mse):
     if mse == 0:
         return float('inf')
@@ -127,8 +130,17 @@ for data_iter_step, (images, paths) in enumerate(data_loader):
 
     with torch.no_grad():
         xrec = model(images, None, data_iter_step, step=0, is_val=True)
-        # 从encode获取tk_labels
-        _, _, [_, _, tk_labels] = model.encode(images)
+        # 修改forward方法调用，正确处理返回的unique_cand_vecs_info信息
+        if hasattr(model, 'encode'):
+            _, _, [_, _, tk_labels, unique_cand_vecs_info] = model.encode(images)
+        else:
+            # 如果没有encode方法，则直接从forward获取结果
+            _, _, [_, _, tk_labels] = model(images, None, data_iter_step, step=0, is_val=True)
+            unique_cand_vecs_info = None
+        
+        # 收集unique_cand_vecs的大小信息
+        if unique_cand_vecs_info is not None:
+            unique_cand_vecs_sizes.append(unique_cand_vecs_info['size'])
 
     # 计算MSE
     mse = F.mse_loss(images, xrec, reduction='none').mean(dim=[1,2,3])
@@ -159,6 +171,16 @@ avg_mse = mse_total / num_images
 avg_psnr = psnr_total / num_images
 efficient_token = (token_freq > 0).sum().item()
 
+# 计算unique_cand_vecs的平均码本大小
+if unique_cand_vecs_sizes:
+    avg_unique_cand_vecs_size = np.mean(unique_cand_vecs_sizes)
+    min_unique_cand_vecs_size = np.min(unique_cand_vecs_sizes)
+    max_unique_cand_vecs_size = np.max(unique_cand_vecs_sizes)
+else:
+    avg_unique_cand_vecs_size = 0
+    min_unique_cand_vecs_size = 0
+    max_unique_cand_vecs_size = 0
+
 # 获取峰值显存使用情况
 if torch.cuda.is_available():
     peak_memory = torch.cuda.max_memory_allocated() / 1024 / 1024  # 转换为MB
@@ -166,6 +188,9 @@ else:
     peak_memory = 0
 
 print(f"平均 MSE: {avg_mse:.4f} | 平均 PSNR: {avg_psnr:.4f} | 有效 Token: {efficient_token}")
+print(f"平均 unique_cand_vecs 码本大小: {avg_unique_cand_vecs_size:.2f}")
+print(f"最小 unique_cand_vecs 码本大小: {min_unique_cand_vecs_size}")
+print(f"最大 unique_cand_vecs 码本大小: {max_unique_cand_vecs_size}")
 print(f"峰值显存: {peak_memory:.2f} MB" if peak_memory > 0 else "峰值显存: N/A (CPU模式)")
 
 total_time = time.time() - start_time
@@ -176,6 +201,9 @@ with open(os.path.join(args.output_dir, "test_results.txt"), 'w') as f:
     f.write(f"平均 MSE: {avg_mse:.4f}\n")
     f.write(f"平均 PSNR: {avg_psnr:.4f}\n")
     f.write(f"有效 Token: {efficient_token}\n")
+    f.write(f"平均 unique_cand_vecs 码本大小: {avg_unique_cand_vecs_size:.2f}\n")
+    f.write(f"最小 unique_cand_vecs 码本大小: {min_unique_cand_vecs_size}\n")
+    f.write(f"最大 unique_cand_vecs 码本大小: {max_unique_cand_vecs_size}\n")
     if peak_memory > 0:
         f.write(f"峰值显存: {peak_memory:.2f} MB\n")
     else:
