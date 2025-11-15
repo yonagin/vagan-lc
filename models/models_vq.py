@@ -131,7 +131,11 @@ class VQModel(torch.nn.Module):
             self.num_tokens = args.n_vision_words
         elif self.quantize_type == "norm_vq":
             print("****Using NormVQ Quantizer****")
-            self.num_candidates = getattr(args, 'num_candidates', 128)
+            # 使用candidate_ratio替代固定num_candidates
+            candidate_ratio = getattr(args, 'candidate_ratio', 0.1)
+            num_candidates = int(args.n_vision_words * candidate_ratio)
+            self.num_candidates = max(1, min(num_candidates, args.n_vision_words))
+            print(f"Candidate ratio: {candidate_ratio}, Num candidates: {self.num_candidates}")
             # 为norm_vq算法准备缓存变量
             self.register_buffer('sorted_norms_sq', None, persistent=False)
             self.register_buffer('sorted_indices', None, persistent=False)
@@ -185,24 +189,33 @@ class VQModel(torch.nn.Module):
             tok_embeddings_weight = self.tok_embeddings.weight
 
         if self.quantize_type == "norm_vq":
-            # NormVQ算法实现
+            # 新的NormVQ算法实现 - 高效版本
             input_norms_sq = z_flattened.detach().square().sum(dim=1, keepdim=True)
             
             # 获取候选码本索引
-            candidate_indices, candidate_norms_sq = self._get_candidates(input_norms_sq, tok_embeddings_weight)
+            candidate_indices, candidate_norms_sq = self._get_candidates(input_norms_sq,tok_embeddings_weight)
             
-            # 计算候选向量与输入的点积
-            cand_vecs = F.embedding(candidate_indices, tok_embeddings_weight.detach())
-            dot = torch.einsum('nkd,nd->nk', cand_vecs, z_flattened.detach())
+            # 1. 找出所有候选索引中的唯一值，并建立映射关系
+            unique_indices, inverse_indices = torch.unique(candidate_indices, return_inverse=True)
             
-            # 计算距离
+            # 2. 创建临时的、小的子码本 (sub-codebook)
+            unique_cand_vecs = F.embedding(unique_indices, tok_embeddings_weight.detach())
+            
+            # 3. 高效计算点积
+            all_dots = torch.matmul(z_flattened.detach(), unique_cand_vecs.T)
+            
+            # 4. 使用 inverse_indices 来 "还原" 每个 input 对应的候选点积
+            remapped_indices = inverse_indices.reshape(candidate_indices.shape)
+            dot = torch.gather(all_dots, 1, remapped_indices)
+            
+            # 5. 计算欧氏距离平方
             dists_sq = input_norms_sq + candidate_norms_sq - 2.0 * dot
             
-            # 找到最小距离的索引
+            # 6. 找到最小距离的索引
             min_idx_in_cand = torch.argmin(dists_sq, dim=1)
             min_encoding_indices = candidate_indices.gather(1, min_idx_in_cand.unsqueeze(1)).squeeze(1)
             
-            # 获取量化结果
+            # 7. 获取量化结果
             z_q = F.embedding(min_encoding_indices, tok_embeddings_weight).view(z.shape)
             loss = torch.mean((z_q.detach()-z)**2) + 0.33 * torch.mean((z_q - z.detach()) ** 2)
             
@@ -287,7 +300,6 @@ class VQModel(torch.nn.Module):
         return dec
 
     def train(self, mode: bool = True):
-        super().train(mode)
         if self.quantize_type == "norm_vq":
             if not mode and self.training:
                 # 进入eval模式，缓存排序后的码本
@@ -299,4 +311,4 @@ class VQModel(torch.nn.Module):
             if mode and not self.training:
                 # 进入train模式，清除缓存
                 self._is_cached = False
-        return self
+        return super().train(mode)

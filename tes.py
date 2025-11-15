@@ -79,7 +79,7 @@ class Args:
         self.local_embedding_path = './mbin/codebook-100K.pth'
         self.dataset = 'custom'
         self.test_dataset_size = -1  # -1表示使用全部数据，正整数表示限制数据集大小
-        self.num_candidates = 128  # 添加num_candidates参数，默认值为128
+        self.candidate_ratio = 0.1
 
 args = Args()
 
@@ -159,7 +159,14 @@ avg_mse = mse_total / num_images
 avg_psnr = psnr_total / num_images
 efficient_token = (token_freq > 0).sum().item()
 
+# 获取峰值显存使用情况
+if torch.cuda.is_available():
+    peak_memory = torch.cuda.max_memory_allocated() / 1024 / 1024  # 转换为MB
+else:
+    peak_memory = 0
+
 print(f"平均 MSE: {avg_mse:.4f} | 平均 PSNR: {avg_psnr:.4f} | 有效 Token: {efficient_token}")
+print(f"峰值显存: {peak_memory:.2f} MB" if peak_memory > 0 else "峰值显存: N/A (CPU模式)")
 
 total_time = time.time() - start_time
 print(f'测试时间: {total_time:.2f} 秒')
@@ -169,3 +176,7 @@ with open(os.path.join(args.output_dir, "test_results.txt"), 'w') as f:
     f.write(f"平均 MSE: {avg_mse:.4f}\n")
     f.write(f"平均 PSNR: {avg_psnr:.4f}\n")
     f.write(f"有效 Token: {efficient_token}\n")
+    if peak_memory > 0:
+        f.write(f"峰值显存: {peak_memory:.2f} MB\n")
+    else:
+        f.write("峰值显存: N/A (CPU模式)\n")
