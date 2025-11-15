@@ -1,4 +1,6 @@
 # Cell 1: 导入包（最小化）
+%cd vq
+!git pull
 import os
 import time
 import numpy as np
@@ -22,7 +24,7 @@ def load_config(config_path, display=False):
 
 # Cell 3: 测试数据集
 class TestDataset(Dataset):
-    def __init__(self, path, size=256, max_size=-1):
+    def __init__(self, path, size=64, max_size=-1):
         self.size = size
         self.images = [os.path.join(path, file) for file in os.listdir(path) if file.lower().endswith(('.jpg', '.png', '.jpeg'))]
         
@@ -62,7 +64,7 @@ class Args:
         self.pin_mem = False
         self.dataset_path = './img'
         self.vq_config_path = './vqgan_configs/vq-f16.yaml'
-        self.model_path = './vqgan-lc-100K-f16-dim8.pth'
+        self.model_path = './mbin/vqgan-lc-100K-f16-dim8.pth'
         self.embed_dim = 8
         self.n_vision_words = 100000
         self.quantizer_type = 'norm_vq'
@@ -74,9 +76,10 @@ class Args:
         self.rate_d = 1.0
         self.disc_start = 10000
         self.image_size = 256
-        self.local_embedding_path = './codebook-100K.pth'
+        self.local_embedding_path = './mbin/codebook-100K.pth'
         self.dataset = 'custom'
-        self.test_dataset_size = 16  # -1表示使用全部数据，正整数表示限制数据集大小
+        self.test_dataset_size = -1  # -1表示使用全部数据，正整数表示限制数据集大小
+        self.num_candidates = 128  # 添加num_candidates参数，默认值为128
 
 args = Args()
 
